@@ -1,3 +1,4 @@
+# Use multi-platform support - this will use the native architecture when possible
 FROM ruby:2.5.7
 
 # Install dependency packages
@@ -29,11 +30,19 @@ RUN apt-get update && apt-get install -y \
   libvulkan1 \
   libu2f-udev
 
-# Install Chrome
-RUN wget --quiet https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
-    && dpkg -i google-chrome-stable_current_amd64.deb \
+# Install Chrome - use architecture-appropriate package
+RUN ARCH=$(dpkg --print-architecture) \
+    && if [ "$ARCH" = "amd64" ]; then \
+         wget --quiet https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+         && dpkg -i google-chrome-stable_current_amd64.deb; \
+       elif [ "$ARCH" = "arm64" ]; then \
+         wget --quiet https://dl.google.com/linux/direct/google-chrome-stable_current_arm64.deb \
+         && dpkg -i google-chrome-stable_current_arm64.deb; \
+       else \
+         echo "Unsupported architecture: $ARCH"; exit 1; \
+       fi \
     && apt-get -f install \
-    && rm -f /google-chrome-stable_current_amd64.deb
+    && rm -f /google-chrome-stable_current_*.deb
 
 # Install Yarn
 ENV PATH=/root/.yarn/bin:$PATH

@@ -13,8 +13,19 @@ module GRPCWeb::MessageSerialization
     include ::GRPCWeb::ContentTypes
 
     def deserialize_request(request)
-      service_class = request.service.class
-      request_proto_class = service_class.rpc_descs[request.service_method.to_sym].input
+      service_class = request.service.is_a?(Class) ? request.service : request.service.class
+      
+      # Convert snake_case method name back to PascalCase for RPC descriptor lookup
+      # This handles the case where the method name was converted during routing
+      method_symbol = if service_class.rpc_descs.key?(request.service_method.to_sym)
+        request.service_method.to_sym
+      else
+        # Try to find the PascalCase version
+        pascal_case_method = request.service_method.to_s.split('_').map(&:capitalize).join
+        pascal_case_method.to_sym
+      end
+      
+      request_proto_class = service_class.rpc_descs[method_symbol].input
       payload_frame = request.body.find(&:payload?)
 
       if request.content_type == JSON_CONTENT_TYPE

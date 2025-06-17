@@ -28,6 +28,11 @@ class GRPCWeb::MessageFrame
     frame_type == HEADER_FRAME_TYPE
   end
 
+  # Alias for compatibility with MessageFraming.pack_frame
+  def type
+    frame_type
+  end
+
   def ==(other)
     frame_type == other.frame_type && body == other.body
   end

@@ -2,6 +2,8 @@
 
 require 'uri'
 require 'grpc_web/client/client_executor'
+require 'grpc_web/client/streaming_client_executor'
+require 'grpc_web/server/rpc_type_detector'
 
 # GRPC Client implementation
 # Example usage:
@@ -26,9 +28,18 @@ class GRPCWeb::Client
 
   def define_rpc_method(rpc_method, rpc_desc)
     ruby_method = ::GRPC::GenericService.underscore(rpc_method.to_s).to_sym
-    define_singleton_method(ruby_method) do |params = {}, metadata = {}|
-      uri = endpoint_uri(rpc_desc)
-      ::GRPCWeb::ClientExecutor.request(uri, rpc_desc, params, metadata)
+    
+    # Check if this is a streaming method
+    if GRPCWeb::RpcTypeDetector.server_streaming?(service_interface, rpc_method)
+      define_singleton_method(ruby_method) do |params = {}, metadata = {}|
+        uri = endpoint_uri(rpc_desc)
+        ::GRPCWeb::StreamingClientExecutor.request_stream(uri, rpc_desc, params, metadata)
+      end
+    else
+      define_singleton_method(ruby_method) do |params = {}, metadata = {}|
+        uri = endpoint_uri(rpc_desc)
+        ::GRPCWeb::ClientExecutor.request(uri, rpc_desc, params, metadata)
+      end
     end
   end
 

@@ -2,57 +2,62 @@
 
 require 'grpc_web/content_types'
 require 'grpc_web/grpc_web_response'
-require 'grpc_web/server/request_framing'
 require 'grpc_web/server/error_callback'
 require 'grpc_web/server/message_serialization'
 require 'grpc_web/server/text_coder'
-require 'grpc_web/server/grpc_response_encoder'
 require 'grpc_web/server/grpc_request_decoder'
+require 'grpc_web/server/rpc_type_detector'
+require 'grpc_web/server/streaming_response_processor'
 
-# Placeholder
-module GRPCWeb::GRPCRequestProcessor
-  class << self
-    include ::GRPCWeb::ContentTypes
+module GRPCWeb
+  # Module for processing GRPC Web requests.
+  #
+  # Requests are first decoded, then deserialized, then the service is called,
+  # and the response is serialized and encoded.
+  # Errors that occur during this process are rescued and serialized into an
+  # error response.
+  module GRPCRequestProcessor
+    class << self
+      include GRPCWeb::ContentTypes
 
-    def process(grpc_call)
-      encoder = GRPCWeb::GRPCResponseEncoder
-
-      grpc_web_response = execute_request(grpc_call)
-      encoder.encode(grpc_web_response)
-    end
-
-    private
-
-    def execute_request(grpc_call)
-      decoder = GRPCWeb::GRPCRequestDecoder
-
-      service_method = ::GRPC::GenericService.underscore(grpc_call.request.service_method.to_s)
-      begin
-        # Check arity to before passing in metadata to make sure that server can handle the request.
-        # This is to ensure backwards compatibility
-        if grpc_call.request.service.method(service_method.to_sym).arity == 1
-          response = grpc_call.request.service.send(
-            service_method,
-            decoder.decode(grpc_call.request).body,
-          )
-        else
-          response = grpc_call.request.service.send(
-            service_method, decoder.decode(grpc_call.request).body, grpc_call,
-          )
-        end
-      rescue StandardError => e
-        ::GRPCWeb.on_error.call(e, grpc_call.request.service, grpc_call.request.service_method)
-        response = e # Return exception as body if one is raised
-      end
-      ::GRPCWeb::GRPCWebResponse.new(response_content_type(grpc_call.request), response)
-    end
-
-    # Use Accept header value if specified, otherwise use request content type
-    def response_content_type(request)
-      if UNSPECIFIED_CONTENT_TYPES.include?(request.accept)
-        request.content_type
+          def process(grpc_call)
+      service_class = grpc_call.request.service.is_a?(Class) ? grpc_call.request.service : grpc_call.request.service.class
+      rpc_type = RpcTypeDetector.new(service_class, grpc_call.request.service_method).detect
+      if rpc_type == :server_streaming
+        StreamingResponseProcessor.process(grpc_call)
       else
-        request.accept
+        process_unary(grpc_call)
+      end
+      rescue GRPC::BadStatus => e
+        create_error_response(grpc_call.request, e)
+      rescue StandardError => e
+        GRPCWeb.on_error.call(e, grpc_call.request.service, grpc_call.request.service_method)
+        create_error_response(grpc_call.request, e)
+      end
+
+      private
+
+      def process_unary(grpc_call)
+        decoder = GRPCRequestDecoder
+        body = decoder.decode(grpc_call.request).body
+        service_instance = grpc_call.request.service.is_a?(Class) ? grpc_call.request.service.new : grpc_call.request.service
+        response = service_instance.send(grpc_call.request.service_method, body)
+        response_content_type = determine_response_content_type(grpc_call.request)
+        serialization = MessageSerialization
+        serialization.serialize_response(response, response_content_type)
+      end
+
+      def determine_response_content_type(request)
+        if UNSPECIFIED_CONTENT_TYPES.include?(request.accept)
+          request.content_type
+        else
+          request.accept
+        end
+      end
+
+      def create_error_response(request, error)
+        response_content_type = determine_response_content_type(request)
+        GRPCWeb::GRPCWebResponse.new(response_content_type, error)
       end
     end
   end
