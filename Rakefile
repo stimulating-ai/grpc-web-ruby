@@ -19,6 +19,7 @@ module RakeHelpers
   def self.compile_protos_js_cmd(mode, output_dir)
     [
       'docker run',
+      '--platform linux/amd64',
       "-v \"#{File.expand_path('spec/pb-src', __dir__)}:/protofile\"",
       "-v \"#{File.expand_path('spec', __dir__)}:/spec\"",
       '-e "protofile=hello.proto"',
@@ -38,6 +39,7 @@ end
 task :compile_protos_ruby do
   sh [
     'docker run',
+    '--platform linux/amd64',
     "-v \"#{File.expand_path('spec', __dir__)}:/defs\"",
     NAMELY_DOCKER_IMAGE,
     '-d /defs/pb-src',
@@ -52,6 +54,7 @@ task :compile_protos_ts do
   proto_input_files = proto_files.map { |f| f.gsub(defs_dir, '/defs') }
   sh [
     'docker run',
+    '--platform linux/amd64',
     "-v \"#{defs_dir}:/defs\"",
     '--entrypoint protoc',
     NAMELY_DOCKER_IMAGE,

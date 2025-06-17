@@ -8,6 +8,7 @@ require 'grpc_web/grpc_web_request'
 require 'grpc_web/grpc_web_call'
 require 'grpc_web/server/error_callback'
 require 'grpc_web/server/grpc_request_processor'
+require 'grpc_web/server/grpc_response_encoder'
 require "base64"
 
 # Placeholder
@@ -27,22 +28,33 @@ module GRPCWeb::RackHandler
 
       content_type = rack_request.content_type
       accept = rack_request.get_header(ACCEPT_HEADER)
-      metadata = Hash[
-        *env.select { |k, _v| k.start_with? 'HTTP_' }
-            .reject { |k, _v| k.eql? ACCEPT_HEADER }
-            .collect { |k, v| [k.sub(/^HTTP_/, ''), v] }
-            .collect { |k, v| [k, k.end_with?('_BIN') ? Base64.decode64(v) : v] }
-            .collect { |k, v| [k.split('_').collect(&:downcase).join('_'), v] }
-            .sort
-            .flatten
-      ]
       body = rack_request.body.read
+      metadata = extract_metadata(env)
 
       request = GRPCWeb::GRPCWebRequest.new(service, service_method, content_type, accept, body)
-      call = GRPCWeb::GRPCWebCall.new(request, metadata, started: false)
-      response = GRPCWeb::GRPCRequestProcessor.process(call)
+      grpc_call = GRPCWeb::GRPCWebCall.new(request, metadata, started: false)
+      response = GRPCWeb::GRPCRequestProcessor.process(grpc_call)
+      encoded_response = ::GRPCWeb::GRPCResponseEncoder.encode(response)
 
-      [200, { 'Content-Type' => response.content_type }, [response.body]]
+      if response.streaming?
+        # Use Rack hijacking for true streaming
+        if env['rack.hijack?']
+          return hijacked_streaming_response(env, response, encoded_response)
+        else
+          # Fallback to chunked response for servers that don't support hijacking
+          headers = {
+            'Content-Type' => response.content_type,
+            'Transfer-Encoding' => 'chunked',
+            'Cache-Control' => 'no-cache, no-store, must-revalidate',
+            'Connection' => 'keep-alive',
+            'X-Accel-Buffering' => 'no'
+          }
+          return [200, headers, encoded_response]
+        end
+      else
+        # Unary response
+        [200, { 'Content-Type' => response.content_type }, [encoded_response]]
+      end
     rescue Google::Protobuf::ParseError => e
       invalid_response(e.message)
     rescue StandardError => e
@@ -51,6 +63,64 @@ module GRPCWeb::RackHandler
     end
 
     private
+
+    def hijacked_streaming_response(env, response, encoded_response)
+      # Set up hijacking
+      env['rack.hijack'].call
+      io = env['rack.hijack_io']
+      
+      # Write HTTP response headers manually
+      headers = [
+        "HTTP/1.1 200 OK",
+        "Content-Type: #{response.content_type}",
+        "Transfer-Encoding: chunked",
+        "Cache-Control: no-cache, no-store, must-revalidate",
+        "Connection: keep-alive",
+        "X-Accel-Buffering: no",
+        "", # Empty line to end headers
+        ""
+      ]
+      
+      io.write(headers.join("\r\n"))
+      io.flush
+      
+      # Stream the chunks directly to the socket
+      begin
+        encoded_response.each do |chunk|
+          # Write chunk in HTTP chunked format
+          chunk_size = chunk.bytesize.to_s(16)
+          io.write("#{chunk_size}\r\n")
+          io.write(chunk)
+          io.write("\r\n")
+          io.flush
+        end
+        
+        # Write final chunk (0-length chunk indicates end)
+        io.write("0\r\n")
+        io.write("\r\n")  # Final CRLF to end the chunked response
+        io.flush
+      rescue => e
+        # Log error but don't raise since we've already started sending response
+        puts "Streaming error: #{e.message}"
+      ensure
+        io.close rescue nil
+      end
+      
+      # Return special response to indicate hijacking was used
+      [-1, {}, []]
+    end
+
+    def extract_metadata(env)
+      Hash[
+        *env.select { |k, _v| k.start_with? 'HTTP_' }
+            .reject { |k, _v| k.eql? ACCEPT_HEADER }
+            .map { |k, v| [k.sub(/^HTTP_/, ''), v] }
+            .map { |k, v| [k, k.end_with?('_BIN') ? Base64.decode64(v) : v] }
+            .map { |k, v| [k.split('_').collect(&:downcase).join('_'), v] }
+            .sort
+            .flatten
+      ]
+    end
 
     def valid_content_types?(rack_request)
       return false unless ALL_CONTENT_TYPES.include?(rack_request.content_type)

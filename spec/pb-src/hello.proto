@@ -16,7 +16,20 @@ message EmptyResponse {
 
 }
 
+// Streaming messages
+message StreamRequest {
+  string name = 1;
+  int32 count = 2;
+}
+
+message StreamResponse {
+  string message = 1;
+  int32 index = 2;
+}
+
 service HelloService {
   rpc SayHello (HelloRequest) returns (HelloResponse);
   rpc SayNothing (EmptyRequest) returns (EmptyResponse);
+  // Server streaming RPC
+  rpc SayHelloStream (StreamRequest) returns (stream StreamResponse);
 }
