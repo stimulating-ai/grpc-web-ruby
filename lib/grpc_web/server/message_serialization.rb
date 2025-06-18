@@ -64,7 +64,7 @@ module GRPCWeb::MessageSerialization
       payload_frame = ::GRPCWeb::MessageFrame.payload_frame(payload)
       header_frame = ::GRPCWeb::MessageFrame.header_frame(header_str)
 
-      ::GRPCWeb::GRPCWebResponse.new(response.content_type, [payload_frame, header_frame])
+      ::GRPCWeb::GRPCWebResponse.new(response.content_type, '', [payload_frame, header_frame])
     end
 
     def serialize_error_response(response)
@@ -78,7 +78,7 @@ module GRPCWeb::MessageSerialization
         )
       end
       header_frame = ::GRPCWeb::MessageFrame.header_frame(header_str)
-      ::GRPCWeb::GRPCWebResponse.new(response.content_type, [header_frame])
+      ::GRPCWeb::GRPCWebResponse.new(response.content_type, '', [header_frame])
     end
 
     # If needed, trailers can be appended to the response as a 2nd

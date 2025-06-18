@@ -40,11 +40,22 @@ module GRPCWeb
       def process_unary(grpc_call)
         decoder = GRPCRequestDecoder
         body = decoder.decode(grpc_call.request).body
+        
+        # Convert PascalCase method name to snake_case for calling the Ruby method
+        original_method_name = grpc_call.request.service_method.to_s
+        service_method = ::GRPC::GenericService.underscore(original_method_name)
+        
         service_instance = grpc_call.request.service.is_a?(Class) ? grpc_call.request.service.new : grpc_call.request.service
-        response = service_instance.send(grpc_call.request.service_method, body)
+        
+        # Check arity to maintain backwards compatibility
+        if service_instance.method(service_method.to_sym).arity == 1
+          response = service_instance.send(service_method, body)
+        else
+          response = service_instance.send(service_method, body, grpc_call)
+        end
         response_content_type = determine_response_content_type(grpc_call.request)
-        serialization = MessageSerialization
-        serialization.serialize_response(response, response_content_type)
+        grpc_web_response = GRPCWeb::GRPCWebResponse.new(response_content_type, response)
+        MessageSerialization.serialize_response(grpc_web_response)
       end
 
       def determine_response_content_type(request)
@@ -57,7 +68,8 @@ module GRPCWeb
 
       def create_error_response(request, error)
         response_content_type = determine_response_content_type(request)
-        GRPCWeb::GRPCWebResponse.new(response_content_type, error)
+        grpc_web_response = GRPCWeb::GRPCWebResponse.new(response_content_type, error)
+        MessageSerialization.serialize_response(grpc_web_response)
       end
     end
   end
